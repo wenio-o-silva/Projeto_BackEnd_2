@@ -4,10 +4,15 @@ import clienteRoutes from "./routes/cliente.routes.js";
 import quartoRoutes from "./routes/quarto.routes.js";
 import reservaRoutes from "./routes/reserva.routes.js";
 
-const app = express();
+import authMiddleware from "./middlewares/authMiddleware.js";
 
+const app = express();
 app.use(express.json());
+// Rotas públicas
 app.use("/auth", authRoutes);
+
+app.use(authMiddleware);
+// Rotas protegidas
 app.use("/clientes", clienteRoutes);
 app.use("/quartos", quartoRoutes);
 app.use("/reservas", reservaRoutes);

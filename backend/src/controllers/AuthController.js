@@ -56,6 +56,11 @@ class AuthController {
       return res.status(500).json({ error: err.message });
     }
   }
+
+  async logout(req, res) {
+    return res.json({ message: "Logout realizado com sucesso." });
+  }
+
 }
 
 export default new AuthController();
