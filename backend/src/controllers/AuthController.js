@@ -1,66 +1,182 @@
-import jwt from "jsonwebtoken";
-import bcrypt from "bcrypt";
-import { User } from "../database/models/User.js";
-import authConfig from "../config/auth.js";
+import { Reserva } from "../database/models/Reserva.js";
+import { Cliente } from "../database/models/Cliente.js";
+import { Quarto } from "../database/models/Quarto.js";
+import { calculateTotal } from "../utils/calculateTotal.js";
 
-class AuthController {
-  async register(req, res) {
+class ReservaController {
+
+  validateReserva(data) {
+    const errors = [];
+
+    if (!data.cliente_id) {
+      errors.push("cliente_id é obrigatório.");
+    }
+
+    if (!data.quarto_id) {
+      errors.push("quarto_id é obrigatório.");
+    }
+
+    if (!data.data_entrada) {
+      errors.push("data_entrada é obrigatória.");
+    }
+
+    if (!data.data_saida) {
+      errors.push("data_saida é obrigatória.");
+    }
+
+    // validar formato de datas
+    const entrada = new Date(data.data_entrada);
+    const saida = new Date(data.data_saida);
+
+    if (isNaN(entrada.getTime())) {
+      errors.push("data_entrada inválida.");
+    }
+
+    if (isNaN(saida.getTime())) {
+      errors.push("data_saida inválida.");
+    }
+
+    // validar ordem das datas (entrada < saída)
+    if (!isNaN(entrada.getTime()) && !isNaN(saida.getTime())) {
+      if (entrada >= saida) {
+        errors.push("data_saida deve ser maior que data_entrada.");
+      }
+    }
+
+    return errors;
+  }
+
+  // ---------------------------------------------------------
+  async create(req, res) {
     try {
-      const { username, password } = req.body;
+      const { cliente_id, quarto_id, data_entrada, data_saida } = req.body;
 
-      const exists = await User.findOne({ where: { username } });
-      if (exists) {
-        return res.status(400).json({ error: "Usuário já existe" });
+      const errors = this.validateReserva(req.body);
+      if (errors.length > 0) {
+        return res.status(400).json({ error: "Erro de validação", messages: errors });
       }
 
-      const user = await User.create({ username, password });
+      const cliente = await Cliente.findByPk(cliente_id);
+      if (!cliente) {
+        return res.status(404).json({ error: "Cliente não encontrado" });
+      }
 
-      return res.status(201).json({
-        id: user.id,
-        username: user.username
+      const quarto = await Quarto.findByPk(quarto_id);
+      if (!quarto) {
+        return res.status(404).json({ error: "Quarto não encontrado" });
+      }
+
+      if (!quarto.disponibilidade) {
+        return res.status(400).json({ error: "Quarto indisponível" });
+      }
+
+      const valor_total = calculateTotal(
+        Number(quarto.preco_diaria),
+        data_entrada,
+        data_saida
+      );
+
+      const reserva = await Reserva.create({
+        cliente_id,
+        quarto_id,
+        data_entrada,
+        data_saida,
+        valor_total
       });
+
+      return res.status(201).json(reserva);
+
     } catch (err) {
       return res.status(400).json({ error: err.message });
     }
   }
 
-  async login(req, res) {
+  async index(req, res) {
     try {
-      const { username, password } = req.body;
-
-      const user = await User.findOne({ where: { username } });
-
-      if (!user) {
-        return res.status(404).json({ error: "Usuário não encontrado" });
-      }
-
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) {
-        return res.status(401).json({ error: "Senha incorreta" });
-      }
-
-      // Gerar token
-      const token = jwt.sign(
-        { id: user.id },
-        authConfig.secret,
-        { expiresIn: authConfig.expiresIn }
-      );
-
-      return res.json({
-        id: user.id,
-        username: user.username,
-        token
+      const reservas = await Reserva.findAll({
+        include: [
+          { model: Cliente },
+          { model: Quarto }
+        ]
       });
 
+      return res.json(reservas);
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
   }
 
-  async logout(req, res) {
-    return res.json({ message: "Logout realizado com sucesso." });
+  async update(req, res) {
+    try {
+      const { id } = req.params;
+
+      const reserva = await Reserva.findByPk(id);
+      if (!reserva) {
+        return res.status(404).json({ error: "Reserva não encontrada" });
+      }
+
+      const errors = this.validateReserva(req.body);
+      if (errors.length > 0) {
+        return res.status(400).json({ error: "Erro de validação", messages: errors });
+      }
+
+      const { cliente_id, quarto_id, data_entrada, data_saida } = req.body;
+
+      // Verificar cliente
+      const cliente = await Cliente.findByPk(cliente_id);
+      if (!cliente) {
+        return res.status(404).json({ error: "Cliente não encontrado" });
+      }
+
+      // Verificar quarto
+      const quarto = await Quarto.findByPk(quarto_id);
+      if (!quarto) {
+        return res.status(404).json({ error: "Quarto não encontrado" });
+      }
+
+      // Verificar disponibilidade se trocar o quarto
+      if (quarto_id !== reserva.quarto_id && !quarto.disponibilidade) {
+        return res.status(400).json({ error: "Quarto indisponível" });
+      }
+
+      // Recalcular valor total
+      const valor_total = calculateTotal(
+        Number(quarto.preco_diaria),
+        data_entrada,
+        data_saida
+      );
+
+      await reserva.update({
+        cliente_id,
+        quarto_id,
+        data_entrada,
+        data_saida,
+        valor_total
+      });
+
+      return res.json(reserva);
+
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
   }
 
+  async delete(req, res) {
+    try {
+      const { id } = req.params;
+      const reserva = await Reserva.findByPk(id);
+
+      if (!reserva) {
+        return res.status(404).json({ error: "Reserva não encontrada" });
+      }
+
+      await reserva.destroy();
+      return res.json({ message: "Reserva deletada com sucesso." });
+
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
 }
 
-export default new AuthController();
+export default new ReservaController();
